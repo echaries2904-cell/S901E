@@ -1,0 +1,43 @@
+name: Build Samsung S901E Kernel (KSU Next + SUSFS)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+
+      - name: Setup Build Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git build-essential bc libncurses5-dev libssl-dev libelf-dev flex bison ccache zip LLVM python3 tar
+
+      - name: Setup Toolchain & Build Script
+        run: |
+          chmod +x build_kernel_GKI.sh
+
+      - name: Integrate KernelSU Next & SUSFS
+        run: |
+          cd kernel_platform/common
+          curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
+          cp -r susfs4ksu/kernel_patches/5.10/* . || true
+          cp -r susfs4ksu/fs/susfs fs/ || true
+
+      - name: Run Samsung GKI Build
+        run: |
+          ./build_kernel_GKI.sh
+
+      - name: Package Output Image
+        run: |
+          mkdir -p out_artifact
+          find kernel_platform/out -name "Image*" -exec cp {} out_artifact/ \; || true
+
+      - name: Upload Kernel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: S901E-KernelSU-Next-SUSFS
+          path: out_artifact/*
