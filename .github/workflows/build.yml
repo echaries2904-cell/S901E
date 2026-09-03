@@ -12,8 +12,7 @@ jobs:
 
       - name: Setup Permissions
         run: |
-          chmod +x build_kernel_GKI.sh || true
-          find . -type f -name "*.sh" -exec chmod +x {} + || true
+          chmod -R +x .
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
@@ -29,7 +28,7 @@ jobs:
 
       - name: Run Samsung GKI Build
         run: |
-          ./build_kernel_GKI.sh
+          bash build_kernel_GKI.sh
 
       - name: Package Output Image
         run: |
