@@ -52,23 +52,26 @@ jobs:
           PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
           patch -p1 --fuzz=3 < "$PATCH_FILE" || true
 
-      - name: Inject KSU & SUSFS Configs
+      - name: Inject KSU & SUSFS Configs Everywhere
         run: |
-          CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
-          echo "CONFIG_KSU=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$CONF"
-          echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$CONF"
-          echo "CONFIG_KPROBES=y" >> "$CONF"
-          echo "CONFIG_HAVE_KPROBES=y" >> "$CONF"
-          echo "CONFIG_KPROBE_EVENTS=y" >> "$CONF"
+          # Tìm tất cả file config trong kernel_platform và nạp cấu hình KSU/SUSFS
+          find kernel_platform -type f \( -name "*gki_defconfig*" -o -name "*waipio*defconfig*" -o -name "*.config" \) | while read -r CONF; do
+            echo "Injecting configs into $CONF..."
+            echo "CONFIG_KSU=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$CONF"
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$CONF"
+            echo "CONFIG_KPROBES=y" >> "$CONF"
+            echo "CONFIG_HAVE_KPROBES=y" >> "$CONF"
+            echo "CONFIG_KPROBE_EVENTS=y" >> "$CONF"
+          done
 
       - name: Fix Environment & Build
         run: |
@@ -76,6 +79,7 @@ jobs:
           mkdir -p out/target/product/r0q/tmp
           mkdir -p kernel_platform/out/target/product/r0q/tmp
           
+          # Fix hàm apply_defconfig_fragment rỗng
           find kernel_platform -type f -name "build.config.sec" -exec bash -c '
             for f; do
               sed -i "1i apply_defconfig_fragment() { :; }" "$f"
@@ -83,6 +87,9 @@ jobs:
           ' bash {} +
 
           chmod -R +x .
+          
+          # Đặt biến VARIANT=gki để Samsung biết cần lấy file config nào
+          export VARIANT=gki
           ./build_kernel_GKI.sh
 
       - name: Package AnyKernel3
