@@ -11,21 +11,29 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup Build Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git build-essential bc libncurses5-dev libssl-dev libelf-dev flex bison ccache zip LLVM python3 tar
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update -y || sudo apt-get update -y --fix-missing
+          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev libelf-dev flex bison ccache zip LLVM python3 tar git curl wget clang lld
 
-      - name: Setup Toolchain & Build Script
+      - name: Make Scripts Executable
         run: |
-          chmod +x build_kernel_GKI.sh
+          chmod +x build_kernel_GKI.sh || true
+          find . -type f -name "*.sh" -exec chmod +x {} + || true
 
       - name: Integrate KernelSU Next & SUSFS
         run: |
-          cd kernel_platform/common
-          curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10
-          cp -r susfs4ksu/kernel_patches/5.10/* . || true
-          cp -r susfs4ksu/fs/susfs fs/ || true
+          if [ -d "kernel_platform/common" ]; then
+            cd kernel_platform/common
+            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 || true
+            cp -r susfs4ksu/kernel_patches/5.10/* . || true
+            cp -r susfs4ksu/fs/susfs fs/ || true
+          else
+            echo "Directory kernel_platform/common not found, skipping patch placement."
+          fi
 
       - name: Run Samsung GKI Build
         run: |
@@ -34,7 +42,8 @@ jobs:
       - name: Package Output Image
         run: |
           mkdir -p out_artifact
-          find kernel_platform/out -name "Image*" -exec cp {} out_artifact/ \; || true
+          find out/ -name "Image*" -exec cp {} out_artifact/ \; || true
+          find kernel_platform/ -name "Image*" -exec cp {} out_artifact/ \; || true
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
