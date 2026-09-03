@@ -10,15 +10,7 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          sudo rm -rf /var/lib/apt/lists/*
-          sudo apt-get update -y || sudo apt-get update -y --fix-missing
-          sudo apt-get install -y build-essential bc libncurses5-dev libssl-dev libelf-dev flex bison ccache zip LLVM python3 tar git curl wget clang lld
-
-      - name: Make Scripts Executable
+      - name: Setup Permissions
         run: |
           chmod +x build_kernel_GKI.sh || true
           find . -type f -name "*.sh" -exec chmod +x {} + || true
