@@ -5,36 +5,92 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     steps:
+      - name: Free disk space
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/kou/arrow/e49d8ae15583ceff03237571569099a6ad62be32/ci/scripts/util_free_space.sh | bash
+
+      - name: Add 16GB Swap Space
+        run: |
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+          free -h
+
       - name: Checkout Source Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
-      - name: Setup Permissions
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zip bc bison flex g++-multilib gcc-multilib libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z1-dev libxml2-utils xsltproc unzip
+
+      - name: Add KernelSU Next
         run: |
           chmod -R +x .
-
-      - name: Integrate KernelSU Next & SUSFS
-        run: |
-          if [ -d "kernel_platform/common" ]; then
-            cd kernel_platform/common
-            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 || true
-            cp -r susfs4ksu/kernel_patches/5.10/* . || true
-            cp -r susfs4ksu/fs/susfs fs/ || true
-          else
-            echo "Directory kernel_platform/common not found, skipping patch placement."
+          if [ -d "kernel_platform" ]; then
+            cd kernel_platform
+            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs
           fi
 
-      - name: Run Samsung GKI Build
+      - name: Setup SUSFS Patches & Configs
+        run: |
+          cd kernel_platform
+          
+          # Clone repository chứa SUSFS
+          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs4ksu || true
+
+          # Copy file nguồn và patch của SUSFS
+          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU-Next/ || true
+          cp susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch ./common/ || true
+          cp susfs4ksu/kernel_patches/fs/susfs.c ./common/fs/ || true
+          cp susfs4ksu/kernel_patches/include/linux/susfs.h ./common/include/linux/ || true
+
+          # Áp dụng patch cho KernelSU-Next
+          if [ -d "KernelSU-Next" ]; then
+            cd KernelSU-Next
+            patch -p1 < 10_enable_susfs_for_ksu.patch || true
+            cd ..
+          fi
+
+          # Áp dụng patch cho Kernel Common
+          cd common
+          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch || true
+          
+          # Bật cấu hình SUSFS vào gki_defconfig
+          DEFCONFIG="./arch/arm64/configs/gki_defconfig"
+          if [ -f "$DEFCONFIG" ]; then
+            echo "CONFIG_KSU=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $DEFCONFIG
+            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $DEFCONFIG
+          fi
+
+      - name: Build Kernel S901E
         run: |
           bash build_kernel_GKI.sh
 
       - name: Package Output Image
         run: |
           mkdir -p out_artifact
-          find out/ -name "Image*" -exec cp {} out_artifact/ \; || true
-          find kernel_platform/ -name "Image*" -exec cp {} out_artifact/ \; || true
+          find . -name "Image*" -type f -exec cp {} out_artifact/ \; || true
 
       - name: Upload Kernel Artifact
         uses: actions/upload-artifact@v4
