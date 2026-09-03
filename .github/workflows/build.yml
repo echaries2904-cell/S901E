@@ -75,7 +75,13 @@ jobs:
           set -e
           mkdir -p out/target/product/r0q/tmp
           mkdir -p kernel_platform/out/target/product/r0q/tmp
-          find kernel_platform -type f -name "build.config*" -exec sed -i 's/apply_defconfig_fragment/# apply_defconfig_fragment/g' {} +
+          
+          find kernel_platform -type f -name "build.config.sec" -exec bash -c '
+            for f; do
+              sed -i "1i apply_defconfig_fragment() { :; }" "$f"
+            done
+          ' bash {} +
+
           chmod -R +x .
           ./build_kernel_GKI.sh
 
