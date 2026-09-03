@@ -60,7 +60,7 @@ jobs:
       - name: Inject KSU & SUSFS Configs
         run: |
           CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
-          cat >> "$CONF" <<'EOF'
+          cat >> "$CONF" << 'EOF'
 CONFIG_KSU=y
 CONFIG_KSU_SUSFS=y
 CONFIG_KSU_SUSFS_SUS_PATH=y
@@ -77,21 +77,17 @@ CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 EOF
 
-      - name: Fix Samsung Environment & Build (mirvora method)
+      - name: Fix Samsung Environment & Build
         run: |
           set -e
           
-          # 1. Tạo thư mục tạm để không bị lỗi missing directory
           mkdir -p out/target/product/r0q/tmp
           mkdir -p kernel_platform/out/target/product/r0q/tmp
 
-          # 2. Sửa triệt để hàm apply_defconfig_fragment gây lỗi trong các file build.config của Samsung
           find kernel_platform -type f -name "build.config*" -exec sed -i 's/apply_defconfig_fragment/# apply_defconfig_fragment/g' {} +
 
-          # 3. Cấp quyền thực thi toàn bộ repo
           chmod -R +x .
 
-          # 4. Chạy script build chính thức của Samsung
           ./build_kernel_GKI.sh
 
       - name: Package AnyKernel3
