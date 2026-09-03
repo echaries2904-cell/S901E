@@ -36,35 +36,33 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zip bc bison flex g++-multilib gcc-multilib libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z1-dev libxml2-utils xsltproc unzip
 
-      - name: Integrate KernelSU Next
+      - name: Integrate KernelSU Next & SUSFS
         run: |
           chmod -R +x .
-          if [ -d "kernel_platform/common" ]; then
-            cd kernel_platform/common
-            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
-          elif [ -d "kernel_platform" ]; then
-            cd kernel_platform
-            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
+          
+          # Xác định vị trí kernel common của Samsung
+          KDIR="kernel_platform/common"
+          if [ ! -d "$KDIR" ]; then
+            KDIR="common"
           fi
 
-      - name: Setup SUSFS Patches & Configs
-        run: |
-          TARGET_DIR=""
-          if [ -d "kernel_platform/common" ]; then
-            TARGET_DIR="kernel_platform/common"
-          elif [ -d "kernel_platform" ]; then
-            TARGET_DIR="kernel_platform"
-          fi
-
-          if [ -n "$TARGET_DIR" ]; then
-            cd $TARGET_DIR
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs4ksu || true
-
-            cp susfs4ksu/kernel_patches/fs/susfs.c ./fs/ || true
-            cp susfs4ksu/kernel_patches/include/linux/susfs.h ./include/linux/ || true
+          if [ -d "$KDIR" ]; then
+            cd $KDIR
             
-            patch -p1 < susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch || true
+            # 1. Tải KernelSU-Next
+            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
+            
+            # 2. Tải SUSFS patch cho GKI Android 12 (Kernel 5.10)
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs_src || true
 
+            # 3. Copy file susfs vào nguồn kernel Samsung
+            cp susfs_src/kernel_patches/fs/susfs.c ./fs/ || true
+            cp susfs_src/kernel_patches/include/linux/susfs.h ./include/linux/ || true
+            
+            # 4. Apply Patch SUSFS cho Kernel 5.10
+            patch -p1 < susfs_src/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch || true
+
+            # 5. Bật các cờ SUSFS vào gki_defconfig của Samsung
             DEFCONFIG="./arch/arm64/configs/gki_defconfig"
             if [ -f "$DEFCONFIG" ]; then
               echo "CONFIG_KSU=y" >> $DEFCONFIG
@@ -81,7 +79,7 @@ jobs:
             fi
           fi
 
-      - name: Run Samsung GKI Build
+      - name: Build Samsung Kernel
         run: |
           bash build_kernel_GKI.sh
 
