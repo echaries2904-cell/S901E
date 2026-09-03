@@ -1,94 +1,188 @@
-name: Build Samsung S901E Kernel (KSU Next + SUSFS)
+name: Build GKI Kernel with KernelSU Next + SUSFS
 
 on:
   workflow_dispatch:
+    inputs:
+      ksu_susfs:
+        description: "Include KernelSU Next + SUSFS"
+        type: boolean
+        default: true
+  push:
+    branches: [ "main" ]
+    paths:
+      - "kernel_platform/**"
+      - ".github/workflows/build.yml"
+
+env:
+  # ---- ADJUST THESE TO MATCH YOUR REPO ----
+  KERNEL_ROOT: kernel_platform/common      # folder with the top-level Makefile
+  DEFCONFIG_PATH: kernel_platform/common/arch/arm64/configs/gki_defconfig  # adjust filename
+  SUSFS_BRANCH: gki-android12-5.10          # must match your kernel base (5.10.x)
+  KSU_NEXT_BRANCH: next
+  CCACHE_DIR: /home/runner/.ccache
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
     steps:
+      # ---------------------------------------------------------------
+      # 1. Free up disk space (GKI builds need 30-50GB+)
+      # ---------------------------------------------------------------
       - name: Free disk space
         run: |
-          curl -fsSL https://raw.githubusercontent.com/kou/arrow/e49d8ae15583ceff03237571569099a6ad62be32/ci/scripts/util_free_space.sh | bash
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo docker image prune --all --force
+          df -h
 
-      - name: Add 16GB Swap Space
-        run: |
-          sudo swapoff -a || true
-          sudo rm -f /swapfile
-          sudo dd if=/dev/zero of=/swapfile bs=1M count=16384 status=progress
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
-
-      - name: Checkout Source Code
+      # ---------------------------------------------------------------
+      # 2. Checkout your repo
+      # ---------------------------------------------------------------
+      - name: Checkout source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: recursive
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.x'
-
+      # ---------------------------------------------------------------
+      # 3. Install build dependencies
+      # ---------------------------------------------------------------
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y zip bc bison flex g++-multilib gcc-multilib libc6-dev-i386 libncurses-dev lib32ncurses-dev libx11-dev lib32z1-dev libxml2-utils xsltproc unzip
+          sudo apt-get install -y \
+            bc bison build-essential ccache curl flex \
+            git gnupg gperf libncurses-dev libssl-dev \
+            python3 python3-pip rsync unzip zip zlib1g-dev \
+            libelf-dev dwarves lz4 device-tree-compiler
 
-      - name: Integrate KernelSU Next & SUSFS
+      - name: Setup ccache
         run: |
-          chmod -R +x .
-          
-          KDIR="kernel_platform/common"
-          if [ ! -d "$KDIR" ]; then
-            KDIR="common"
+          mkdir -p "$CCACHE_DIR"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}
+          restore-keys: |
+            ccache-${{ runner.os }}-
+
+      # ---------------------------------------------------------------
+      # 4. Add KernelSU Next
+      # ---------------------------------------------------------------
+      - name: Add KernelSU Next
+        if: ${{ inputs.ksu_susfs != false }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s ${{ env.KSU_NEXT_BRANCH }}
+          echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"
+
+      # ---------------------------------------------------------------
+      # 5. Clone SUSFS and apply patches
+      # ---------------------------------------------------------------
+      - name: Clone SUSFS4KSU
+        if: ${{ inputs.ksu_susfs != false }}
+        run: |
+          git clone --depth=1 -b ${{ env.SUSFS_BRANCH }} \
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+
+      - name: Apply SUSFS kernel patch
+        if: ${{ inputs.ksu_susfs != false }}
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          set -e
+          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
+          echo "Using patch: $PATCH_FILE"
+          cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
+          patch -p1 --fuzz=3 < "$PATCH_FILE"
+
+      - name: Apply SUSFS patch to KernelSU Next
+        if: ${{ inputs.ksu_susfs != false }}
+        working-directory: ${{ env.KERNEL_ROOT }}/KernelSU-Next
+        run: |
+          patch -p1 --fuzz=3 < ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+
+      # ---------------------------------------------------------------
+      # 6. Enable required config symbols in defconfig
+      # ---------------------------------------------------------------
+      - name: Patch defconfig
+        run: |
+          set -e
+          CONF="${{ env.DEFCONFIG_PATH }}"
+          if [ ! -f "$CONF" ]; then
+            echo "::error::Defconfig not found at $CONF - update DEFCONFIG_PATH in the workflow env"
+            exit 1
           fi
+          cat >> "$CONF" <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          EOF
 
-          if [ -d "$KDIR" ]; then
-            cd $KDIR
-            
-            # 1. Tải KernelSU-Next
-            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
-            
-            # 2. Tải SUSFS patch cho GKI Android 12 (Kernel 5.10)
-            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs_src || true
+      # ---------------------------------------------------------------
+      # 7. Build using your existing script
+      # ---------------------------------------------------------------
+      - name: Build kernel
+        run: |
+          chmod +x build_kernel_GKI.sh
+          ./build_kernel_GKI.sh
 
-            # 3. Copy file susfs vào nguồn kernel Samsung
-            cp susfs_src/kernel_patches/fs/susfs.c ./fs/ || true
-            cp susfs_src/kernel_patches/include/linux/susfs.h ./include/linux/ || true
-            
-            # 4. Apply Patch SUSFS cho Kernel 5.10
-            patch -p1 < susfs_src/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch || true
-
-            # 5. Bật các cờ SUSFS vào gki_defconfig
-            DEFCONFIG="./arch/arm64/configs/gki_defconfig"
-            if [ -f "$DEFCONFIG" ]; then
-              echo "CONFIG_KSU=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $DEFCONFIG
-              echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $DEFCONFIG
-            fi
+      # ---------------------------------------------------------------
+      # 8. Locate build output
+      # ---------------------------------------------------------------
+      - name: Find kernel Image
+        id: find_image
+        run: |
+          set -e
+          IMG=$(find . -type f \( -name "Image" -o -name "Image.gz" -o -name "Image.gz-dtb" \) | head -n1)
+          if [ -z "$IMG" ]; then
+            echo "::error::Could not locate a built kernel Image"
+            exit 1
           fi
+          echo "image_path=$IMG" >> "$GITHUB_OUTPUT"
 
-      - name: Build Samsung Kernel
+      # ---------------------------------------------------------------
+      # 9. Package with AnyKernel3
+      # ---------------------------------------------------------------
+      - name: Package with AnyKernel3
         run: |
-          bash build_kernel_GKI.sh
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          rm -rf anykernel/.git
+          cp "${{ steps.find_image.outputs.image_path }}" anykernel/Image
+          cd anykernel
+          zip -r9 ../S901E-KernelSU-Next-SUSFS-$(date +%Y%m%d-%H%M).zip . -x ".git*"
 
-      - name: Package Output Image
-        run: |
-          mkdir -p out_artifact
-          find . -name "Image*" -type f -exec cp {} out_artifact/ \; || true
-
-      - name: Upload Kernel Artifact
+      # ---------------------------------------------------------------
+      # 10. Upload artifact
+      # ---------------------------------------------------------------
+      - name: Upload flashable zip
         uses: actions/upload-artifact@v4
         with:
           name: S901E-KernelSU-Next-SUSFS
-          path: out_artifact/*
+          path: "*.zip"
+          retention-days: 14
+
+      - name: Upload raw Image (debug)
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-image-raw
+          path: ${{ steps.find_image.outputs.image_path }}
+          retention-days: 7
