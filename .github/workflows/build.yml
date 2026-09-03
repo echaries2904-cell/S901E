@@ -20,11 +20,9 @@ env:
   SUSFS_BRANCH: gki-android13-5.10          # S901E Snapdragon, Android 14 firmware (S901EXXUBEXK5) — kernel stays 5.10, no android14-5.10 branch exists
   CCACHE_DIR: /home/runner/.ccache
 
-  # ---- PINNED COMPATIBLE COMMITS (do NOT use the "next" HEAD branch — it has
-  #      drifted from KernelSU upstream and breaks the SUSFS patch, see
-  #      https://github.com/KernelSU-Next/KernelSU-Next/issues/426) ----
-  KSU_NEXT_COMMIT: 300a13f657754339a294c08909e9851936f47ba9
-  # SUSFS commit matching SUSFS_BRANCH above:
+  # ---- SUSFS commit for the kernel-side patch (KernelSU side now comes
+  #      pre-integrated from pershoot/KernelSU-Next's next-susfs branch,
+  #      see step 4) ----
   #   gki-android12-5.10 -> ed9a1ee64e1886ee2c0288f1c91e33558465993c
   #   gki-android13-5.10 -> e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d  (in use)
   SUSFS_COMMIT: e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
@@ -80,28 +78,24 @@ jobs:
             ccache-${{ runner.os }}-
 
       # ---------------------------------------------------------------
-      # 4. Add KernelSU Next (pinned to a commit known to work with SUSFS —
-      #    do NOT track the "next" branch HEAD, see note in env: above)
+      # 4. Add KernelSU Next — using the pershoot/KernelSU-Next fork's
+      #    "next-susfs" branch, which already has SUSFS hooks pre-merged.
+      #    This avoids manually patching sucompat.c/selinux.c ourselves,
+      #    which kept breaking because those files change too often for a
+      #    static patch file to apply cleanly.
       # ---------------------------------------------------------------
-      - name: Add KernelSU Next
+      - name: Add KernelSU Next (SUSFS-integrated fork)
         if: ${{ inputs.ksu_susfs != false }}
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
           set -e
-          # Let the official installer clone the repo and wire it into
-          # drivers/Makefile + drivers/Kconfig (this part is safe to keep
-          # tracking upstream), THEN pin the checkout to the known-good commit.
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-            | bash -s next
-          cd KernelSU-Next
-          git fetch --depth=1 origin ${{ env.KSU_NEXT_COMMIT }}
-          git checkout ${{ env.KSU_NEXT_COMMIT }}
-          cd ..
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" \
+            | bash -s next-susfs
           echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------
-      # 5. Clone SUSFS (pinned commit matching the KSU-Next commit above)
-      #    and apply patches
+      # 5. Clone SUSFS (pinned commit for the kernel-side patch only —
+      #    the KernelSU-side patch is no longer needed, see step 4)
       # ---------------------------------------------------------------
       - name: Clone SUSFS4KSU
         if: ${{ inputs.ksu_susfs != false }}
@@ -124,17 +118,6 @@ jobs:
           patch -p1 --fuzz=3 < "$PATCH_FILE"
           if find . -name "*.rej" | grep -q .; then
             echo "::error::Rejected hunks found - SUSFS_COMMIT/SUSFS_BRANCH likely doesn't match this kernel base"
-            find . -name "*.rej" -exec cat {} \;
-            exit 1
-          fi
-
-      - name: Apply SUSFS patch to KernelSU Next
-        if: ${{ inputs.ksu_susfs != false }}
-        working-directory: ${{ env.KERNEL_ROOT }}/KernelSU-Next
-        run: |
-          patch -p1 --fuzz=3 < ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
-          if find . -name "*.rej" | grep -q .; then
-            echo "::error::Rejected hunks found - KSU_NEXT_COMMIT/SUSFS_COMMIT pin is out of sync, see env: block"
             find . -name "*.rej" -exec cat {} \;
             exit 1
           fi
