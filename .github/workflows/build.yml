@@ -2,13 +2,8 @@ name: Build Kernel
 
 on:
   workflow_dispatch:
-    inputs:
-      ksu_susfs:
-        description: "Include KernelSU Next + SUSFS"
-        type: boolean
-        default: true
   push:
-    branches: [ "main" ]
+    branches: [ main ]
 
 jobs:
   build:
@@ -16,97 +11,39 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: Free Disk Space
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
-          sudo docker image prune --all --force
-          df -h
-
       - name: Checkout Source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-          submodules: true
 
       - name: Install Build Dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bc bison build-essential ccache curl flex git gnupg gperf libncurses-dev libssl-dev python3 python3-pip rsync unzip zip zlib1g-dev libelf-dev dwarves lz4 device-tree-compiler
+          sudo apt update
+          sudo apt install -y zip bc bison flex libssl-dev libelf-dev \
+            build-essential python3 rsync cpio kmod lz4 unzip device-tree-compiler
 
-      - name: Setup KernelSU Next
-        if: ${{ inputs.ksu_susfs != false }}
-        working-directory: kernel_platform/common
+      - name: Build Samsung Kernel
         run: |
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
-
-      - name: Clone & Apply SUSFS Patch
-        if: ${{ inputs.ksu_susfs != false }}
-        run: |
-          git clone -b gki-android13-5.10 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
-          cd susfs4ksu
-          git checkout e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
-          cd ../kernel_platform/common
-          cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
-          cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
-          cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
-          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
-          patch -p1 --fuzz=3 < "$PATCH_FILE" || true
-
-      - name: Inject KSU & SUSFS Configs Everywhere
-        run: |
-          # Tìm tất cả file config trong kernel_platform và nạp cấu hình KSU/SUSFS
-          find kernel_platform -type f \( -name "*gki_defconfig*" -o -name "*waipio*defconfig*" -o -name "*.config" \) | while read -r CONF; do
-            echo "Injecting configs into $CONF..."
-            echo "CONFIG_KSU=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> "$CONF"
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> "$CONF"
-            echo "CONFIG_KPROBES=y" >> "$CONF"
-            echo "CONFIG_HAVE_KPROBES=y" >> "$CONF"
-            echo "CONFIG_KPROBE_EVENTS=y" >> "$CONF"
-          done
-
-      - name: Fix Environment & Build
-        run: |
-          set -e
           mkdir -p out/target/product/r0q/tmp
           mkdir -p kernel_platform/out/target/product/r0q/tmp
-          
-          # Fix hàm apply_defconfig_fragment rỗng
-          find kernel_platform -type f -name "build.config.sec" -exec bash -c '
-            for f; do
-              sed -i "1i apply_defconfig_fragment() { :; }" "$f"
-            done
-          ' bash {} +
-
           chmod -R +x .
-          
-          # Đặt biến VARIANT=gki để Samsung biết cần lấy file config nào
-          export VARIANT=gki
-          ./build_kernel_GKI.sh
+          bash ./build_kernel_GKI.sh
 
       - name: Package AnyKernel3
         run: |
-          IMG=$(find kernel_platform/out -name "Image" -o -name "Image.gz" | head -n1)
+          IMG=$(find kernel_platform/out/ -name "Image" -o -name "Image.gz" | head -n1)
           if [ -z "$IMG" ]; then
             echo "Build failed: Image not found!"
             exit 1
           fi
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          cp "$IMG" anykernel/Image
-          cd anykernel
-          zip -r9 ../S901E-KernelSU-Next-SUSFS.zip . -x ".git*"
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AnyKernel
+          cp "$IMG" AnyKernel/Image
+          
+          ZIP_NAME="S22-S901E-KernelSU-SUSFS.zip"
+          zip -r "$ZIP_NAME" AnyKernel/*
+          echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: S901E-KernelSU-Next-SUSFS
-          path: S901E-KernelSU-Next-SUSFS.zip
-          retention-days: 14
+          name: S22-Kernel-Output
+          path: S22-S901E-KernelSU-SUSFS.zip
+          retention-days: 7
