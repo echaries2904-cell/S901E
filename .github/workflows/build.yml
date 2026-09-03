@@ -15,139 +15,139 @@ on:
 
 env:
   # ---- ADJUST THESE TO MATCH YOUR REPO ----
-  KERNEL_ROOT: kernel_platform/common      # folder with the top-level Makefile[cite: 1]
-  DEFCONFIG_PATH: kernel_platform/common/arch/arm64/configs/gki_defconfig  # adjust filename[cite: 1]
-  SUSFS_BRANCH: gki-android13-5.10          # S901E Snapdragon, Android 14 firmware (S901EXXUBEXK5) — kernel stays 5.10, no android14-5.10 branch exists[cite: 1]
-  CCACHE_DIR: /home/runner/.ccache[cite: 1]
+  KERNEL_ROOT: kernel_platform/common      # folder with the top-level Makefile
+  DEFCONFIG_PATH: kernel_platform/common/arch/arm64/configs/gki_defconfig  # adjust filename
+  SUSFS_BRANCH: gki-android13-5.10          # S901E Snapdragon, Android 14 firmware (S901EXXUBEXK5) — kernel stays 5.10, no android14-5.10 branch exists
+  CCACHE_DIR: /home/runner/.ccache
 
   # ---- SUSFS commit for the kernel-side patch (KernelSU side now comes
   #      pre-integrated from pershoot/KernelSU-Next's next-susfs branch,
-  #      see step 4) ----[cite: 1]
-  SUSFS_COMMIT: e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d[cite: 1]
+  #      see step 4) ----
+  SUSFS_COMMIT: e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
 
 jobs:
   build:
-    runs-on: ubuntu-22.04[cite: 1]
-    timeout-minutes: 360[cite: 1]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
 
     steps:
       # ---------------------------------------------------------------
-      # 1. Free up disk space (GKI builds need 30-50GB+)[cite: 1]
+      # 1. Free up disk space (GKI builds need 30-50GB+)
       # ---------------------------------------------------------------
-      - name: Free disk space[cite: 1]
+      - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup[cite: 1]
-          sudo docker image prune --all --force[cite: 1]
-          df -h[cite: 1]
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo docker image prune --all --force
+          df -h
 
       # ---------------------------------------------------------------
-      # 2. Checkout your repo[cite: 1]
+      # 2. Checkout your repo
       # ---------------------------------------------------------------
-      - name: Checkout source[cite: 1]
-        uses: actions/checkout@v4[cite: 1]
+      - name: Checkout source
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 1[cite: 1]
-          submodules: recursive[cite: 1]
+          fetch-depth: 1
+          submodules: recursive
 
       # ---------------------------------------------------------------
-      # 3. Install build dependencies[cite: 1]
+      # 3. Install build dependencies
       # ---------------------------------------------------------------
-      - name: Install dependencies[cite: 1]
+      - name: Install dependencies
         run: |
-          sudo apt-get update[cite: 1]
+          sudo apt-get update
           sudo apt-get install -y \
             bc bison build-essential ccache curl flex \
             git gnupg gperf libncurses-dev libssl-dev \
             python3 python3-pip rsync unzip zip zlib1g-dev \
-            libelf-dev dwarves lz4 device-tree-compiler[cite: 1]
+            libelf-dev dwarves lz4 device-tree-compiler
 
-      - name: Setup ccache[cite: 1]
+      - name: Setup ccache
         run: |
-          mkdir -p "$CCACHE_DIR"[cite: 1]
-          echo "USE_CCACHE=1" >> "$GITHUB_ENV"[cite: 1]
+          mkdir -p "$CCACHE_DIR"
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
 
-      - name: Cache ccache[cite: 1]
-        uses: actions/cache@v4[cite: 1]
+      - name: Cache ccache
+        uses: actions/cache@v4
         with:
-          path: ${{ env.CCACHE_DIR }}[cite: 1]
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}[cite: 1]
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}
           restore-keys: |
-            ccache-${{ runner.os }}-[cite: 1]
+            ccache-${{ runner.os }}-
 
       # ---------------------------------------------------------------
       # 4. Add KernelSU Next — using the pershoot/KernelSU-Next fork's
       #    "next-susfs" branch, which already has SUSFS hooks pre-merged.
       # ---------------------------------------------------------------
-      - name: Add KernelSU Next (SUSFS-integrated fork)[cite: 1]
-        if: ${{ inputs.ksu_susfs != false }}[cite: 1]
-        working-directory: ${{ env.KERNEL_ROOT }}[cite: 1]
+      - name: Add KernelSU Next (SUSFS-integrated fork)
+        if: ${{ inputs.ksu_susfs != false }}
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          set -e[cite: 1]
+          set -e
           curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" \
-            | bash -s next-susfs[cite: 1]
-          echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"[cite: 1]
+            | bash -s next-susfs
+          echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------
-      # 5. Clone SUSFS & apply kernel patch[cite: 1]
+      # 5. Clone SUSFS & apply kernel patch
       # ---------------------------------------------------------------
-      - name: Clone SUSFS4KSU[cite: 1]
-        if: ${{ inputs.ksu_susfs != false }}[cite: 1]
+      - name: Clone SUSFS4KSU
+        if: ${{ inputs.ksu_susfs != false }}
         run: |
           git clone -b ${{ env.SUSFS_BRANCH }} \
-            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu[cite: 1]
-          cd susfs4ksu[cite: 1]
-          git checkout ${{ env.SUSFS_COMMIT }}[cite: 1]
+            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          cd susfs4ksu
+          git checkout ${{ env.SUSFS_COMMIT }}
 
-      - name: Apply SUSFS kernel patch[cite: 1]
-        if: ${{ inputs.ksu_susfs != false }}[cite: 1]
-        working-directory: ${{ env.KERNEL_ROOT }}[cite: 1]
+      - name: Apply SUSFS kernel patch
+        if: ${{ inputs.ksu_susfs != false }}
+        working-directory: ${{ env.KERNEL_ROOT }}
         run: |
-          set -e[cite: 1]
-          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)[cite: 1]
-          echo "Using patch: $PATCH_FILE"[cite: 1]
-          cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/[cite: 1]
-          cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/[cite: 1]
-          cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/[cite: 1]
-          patch -p1 --fuzz=3 < "$PATCH_FILE"[cite: 1]
-          if find . -name "*.rej" | grep -q .; then[cite: 1]
-            echo "::error::Rejected hunks found - SUSFS_COMMIT/SUSFS_BRANCH likely doesn't match this kernel base"[cite: 1]
-            find . -name "*.rej" -exec cat {} \;[cite: 1]
-            exit 1[cite: 1]
-          fi[cite: 1]
+          set -e
+          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
+          echo "Using patch: $PATCH_FILE"
+          cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
+          cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
+          cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
+          patch -p1 --fuzz=3 < "$PATCH_FILE"
+          if find . -name "*.rej" | grep -q .; then
+            echo "::error::Rejected hunks found - SUSFS_COMMIT/SUSFS_BRANCH likely doesn't match this kernel base"
+            find . -name "*.rej" -exec cat {} \;
+            exit 1
+          fi
 
       # ---------------------------------------------------------------
-      # 6. Enable required config symbols in defconfig[cite: 1]
+      # 6. Enable required config symbols in defconfig
       # ---------------------------------------------------------------
-      - name: Patch defconfig[cite: 1]
+      - name: Patch defconfig
         run: |
-          set -e[cite: 1]
-          CONF="${{ env.DEFCONFIG_PATH }}"[cite: 1]
-          if [ ! -f "$CONF" ]; then[cite: 1]
-            echo "::error::Defconfig not found at $CONF - update DEFCONFIG_PATH in the workflow env"[cite: 1]
-            exit 1[cite: 1]
-          fi[cite: 1]
-          cat >> "$CONF" <<'EOF'[cite: 1]
-          CONFIG_KSU=y[cite: 1]
-          CONFIG_KSU_SUSFS=y[cite: 1]
-          CONFIG_KSU_SUSFS_SUS_PATH=y[cite: 1]
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y[cite: 1]
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y[cite: 1]
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y[cite: 1]
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y[cite: 1]
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y[cite: 1]
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y[cite: 1]
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y[cite: 1]
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y[cite: 1]
-          CONFIG_KPROBES=y[cite: 1]
-          CONFIG_HAVE_KPROBES=y[cite: 1]
-          CONFIG_KPROBE_EVENTS=y[cite: 1]
-          EOF[cite: 1]
+          set -e
+          CONF="${{ env.DEFCONFIG_PATH }}"
+          if [ ! -f "$CONF" ]; then
+            echo "::error::Defconfig not found at $CONF - update DEFCONFIG_PATH in the workflow env"
+            exit 1
+          fi
+          cat >> "$CONF" <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_SUSFS=y
+          CONFIG_KSU_SUSFS_SUS_PATH=y
+          CONFIG_KSU_SUSFS_SUS_MOUNT=y
+          CONFIG_KSU_SUSFS_SUS_KSTAT=y
+          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+          CONFIG_KSU_SUSFS_ENABLE_LOG=y
+          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+          CONFIG_KPROBES=y
+          CONFIG_HAVE_KPROBES=y
+          CONFIG_KPROBE_EVENTS=y
+          EOF
 
       # ---------------------------------------------------------------
       # 7. Build using your existing script
       # ---------------------------------------------------------------
-      - name: Build kernel[cite: 1]
+      - name: Build kernel
         run: |
           set -e
           
@@ -159,47 +159,47 @@ jobs:
           find . -type f -exec chmod +x {} + 2>/dev/null || true
 
           # 3. Thực thi script build
-          chmod +x build_kernel_GKI.sh[cite: 1]
-          ./build_kernel_GKI.sh[cite: 1]
+          chmod +x build_kernel_GKI.sh
+          ./build_kernel_GKI.sh
 
       # ---------------------------------------------------------------
-      # 8. Locate build output[cite: 1]
+      # 8. Locate build output
       # ---------------------------------------------------------------
-      - name: Find kernel Image[cite: 1]
-        id: find_image[cite: 1]
+      - name: Find kernel Image
+        id: find_image
         run: |
-          set -e[cite: 1]
-          IMG=$(find . -type f \( -name "Image" -o -name "Image.gz" -o -name "Image.gz-dtb" \) | head -n1)[cite: 1]
-          if [ -z "$IMG" ]; then[cite: 1]
-            echo "::error::Could not locate a built kernel Image"[cite: 1]
-            exit 1[cite: 1]
-          fi[cite: 1]
-          echo "image_path=$IMG" >> "$GITHUB_OUTPUT"[cite: 1]
+          set -e
+          IMG=$(find . -type f \( -name "Image" -o -name "Image.gz" -o -name "Image.gz-dtb" \) | head -n1)
+          if [ -z "$IMG" ]; then
+            echo "::error::Could not locate a built kernel Image"
+            exit 1
+          fi
+          echo "image_path=$IMG" >> "$GITHUB_OUTPUT"
 
       # ---------------------------------------------------------------
-      # 9. Package with AnyKernel3[cite: 1]
+      # 9. Package with AnyKernel3
       # ---------------------------------------------------------------
-      - name: Package with AnyKernel3[cite: 1]
+      - name: Package with AnyKernel3
         run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel[cite: 1]
-          rm -rf anykernel/.git[cite: 1]
-          cp "${{ steps.find_image.outputs.image_path }}" anykernel/Image[cite: 1]
-          cd anykernel[cite: 1]
-          zip -r9 ../S901E-KernelSU-Next-SUSFS-$(date +%Y%m%d-%H%M).zip . -x ".git*"[cite: 1]
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
+          rm -rf anykernel/.git
+          cp "${{ steps.find_image.outputs.image_path }}" anykernel/Image
+          cd anykernel
+          zip -r9 ../S901E-KernelSU-Next-SUSFS-$(date +%Y%m%d-%H%M).zip . -x ".git*"
 
       # ---------------------------------------------------------------
-      # 10. Upload artifact[cite: 1]
+      # 10. Upload artifact
       # ---------------------------------------------------------------
-      - name: Upload flashable zip[cite: 1]
-        uses: actions/upload-artifact@v4[cite: 1]
+      - name: Upload flashable zip
+        uses: actions/upload-artifact@v4
         with:
-          name: S901E-KernelSU-Next-SUSFS[cite: 1]
-          path: "*.zip"[cite: 1]
-          retention-days: 14[cite: 1]
+          name: S901E-KernelSU-Next-SUSFS
+          path: "*.zip"
+          retention-days: 14
 
-      - name: Upload raw Image (debug)[cite: 1]
-        uses: actions/upload-artifact@v4[cite: 1]
+      - name: Upload raw Image (debug)
+        uses: actions/upload-artifact@v4
         with:
-          name: kernel-image-raw[cite: 1]
-          path: ${{ steps.find_image.outputs.image_path }}[cite: 1]
-          retention-days: 7[cite: 1]
+          name: kernel-image-raw
+          path: ${{ steps.find_image.outputs.image_path }}
+          retention-days: 7
