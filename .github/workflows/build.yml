@@ -1,17 +1,14 @@
-name: Build KernelSU Next + SUSFS (r0q S901E)
+name: Build Samsung S901E (r0q) KernelSU Next + SUSFS
 
 on:
   workflow_dispatch:
     inputs:
       ksu_susfs:
-        description: "Build with KernelSU Next + SUSFS"
+        description: "Include KernelSU Next + SUSFS"
         type: boolean
         default: true
   push:
     branches: [ "main" ]
-    paths:
-      - "kernel_platform/**"
-      - ".github/workflows/build.yml"
 
 jobs:
   build:
@@ -31,21 +28,21 @@ jobs:
           fetch-depth: 1
           submodules: true
 
-      - name: Install Dependencies
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             bc bison build-essential ccache curl flex git gnupg gperf \
             libncurses-dev libssl-dev python3 python3-pip rsync unzip zip \
-            zlib1g-dev libelf-dev dwarves lz4 device-tree-compiler libssl-dev
+            zlib1g-dev libelf-dev dwarves lz4 device-tree-compiler
 
-      - name: Setup KernelSU Next (next-susfs)
+      - name: Setup KernelSU Next
         if: ${{ inputs.ksu_susfs != false }}
         working-directory: kernel_platform/common
         run: |
           curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
 
-      - name: Clone & Patch SUSFS
+      - name: Clone & Apply SUSFS Patch
         if: ${{ inputs.ksu_susfs != false }}
         run: |
           git clone -b gki-android13-5.10 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
@@ -60,7 +57,7 @@ jobs:
           PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
           patch -p1 --fuzz=3 < "$PATCH_FILE" || true
 
-      - name: Patch Defconfig
+      - name: Inject KSU & SUSFS Configs
         run: |
           CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
           cat >> "$CONF" <<'EOF'
@@ -80,28 +77,24 @@ CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 EOF
 
-      - name: Build Kernel (BruhDudeWew Method)
+      - name: Fix Samsung Environment & Build (mirvora method)
         run: |
           set -e
-          # Cấp quyền cho toàn bộ thư mục build
-          chmod -R +x kernel_platform/build/
-          chmod -R +x kernel_platform/tools/
           
-          # Thiết lập môi trường build
-          export ROOT_DIR=$(pwd)
-          export KERNEL_KIT=$ROOT_DIR/kernel_platform
-          
-          # Gọi trực tiếp build.sh của Qualcomm/Android
-          cd kernel_platform
-          
-          # Khai báo biến môi trường cho Waipio (Snapdragon 8 Gen 1)
-          export LTO=thin
-          export BUILD_CONFIG=msm-kernel/build.config.msm.waipio
-          
-          # Thực thi build
-          ./build/build.sh
+          # 1. Tạo thư mục tạm để không bị lỗi missing directory
+          mkdir -p out/target/product/r0q/tmp
+          mkdir -p kernel_platform/out/target/product/r0q/tmp
 
-      - name: Find & Package Output
+          # 2. Sửa triệt để hàm apply_defconfig_fragment gây lỗi trong các file build.config của Samsung
+          find kernel_platform -type f -name "build.config*" -exec sed -i 's/apply_defconfig_fragment/# apply_defconfig_fragment/g' {} +
+
+          # 3. Cấp quyền thực thi toàn bộ repo
+          chmod -R +x .
+
+          # 4. Chạy script build chính thức của Samsung
+          ./build_kernel_GKI.sh
+
+      - name: Package AnyKernel3
         run: |
           IMG=$(find kernel_platform/out -name "Image" -o -name "Image.gz" | head -n1)
           if [ -z "$IMG" ]; then
@@ -112,11 +105,11 @@ EOF
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
           cp "$IMG" anykernel/Image
           cd anykernel
-          zip -r9 ../S901E-KernelSU-Next-SUSFS-r0q.zip . -x ".git*"
+          zip -r9 ../S901E-KernelSU-Next-SUSFS.zip . -x ".git*"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: S901E-KernelSU-Next-SUSFS
-          path: S901E-KernelSU-Next-SUSFS-r0q.zip
+          path: S901E-KernelSU-Next-SUSFS.zip
           retention-days: 14
