@@ -1,10 +1,10 @@
-name: Build GKI Kernel with KernelSU Next + SUSFS
+name: Build KernelSU Next + SUSFS (r0q S901E)
 
 on:
   workflow_dispatch:
     inputs:
       ksu_susfs:
-        description: "Include KernelSU Next + SUSFS"
+        description: "Build with KernelSU Next + SUSFS"
         type: boolean
         default: true
   push:
@@ -13,202 +13,110 @@ on:
       - "kernel_platform/**"
       - ".github/workflows/build.yml"
 
-env:
-  # ---- ADJUST THESE TO MATCH YOUR REPO ----
-  KERNEL_ROOT: kernel_platform/common      # folder with the top-level Makefile
-  DEFCONFIG_PATH: kernel_platform/common/arch/arm64/configs/gki_defconfig  # adjust filename
-  SUSFS_BRANCH: gki-android13-5.10          # S901E Snapdragon, Android 14 firmware (S901EXXUBEXK5) — kernel stays 5.10, no android14-5.10 branch exists
-  CCACHE_DIR: /home/runner/.ccache
-
-  # ---- SUSFS commit for the kernel-side patch (KernelSU side now comes
-  #      pre-integrated from pershoot/KernelSU-Next's next-susfs branch,
-  #      see step 4) ----
-  SUSFS_COMMIT: e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
-
 jobs:
   build:
     runs-on: ubuntu-22.04
     timeout-minutes: 360
 
     steps:
-      # ---------------------------------------------------------------
-      # 1. Free up disk space (GKI builds need 30-50GB+)
-      # ---------------------------------------------------------------
-      - name: Free disk space
+      - name: Free Disk Space
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
           sudo docker image prune --all --force
           df -h
 
-      # ---------------------------------------------------------------
-      # 2. Checkout your repo
-      # ---------------------------------------------------------------
-      - name: Checkout source
+      - name: Checkout Source
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
+          submodules: true
 
-      # ---------------------------------------------------------------
-      # 3. Install build dependencies
-      # ---------------------------------------------------------------
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            bc bison build-essential ccache curl flex \
-            git gnupg gperf libncurses-dev libssl-dev \
-            python3 python3-pip rsync unzip zip zlib1g-dev \
-            libelf-dev dwarves lz4 device-tree-compiler
+            bc bison build-essential ccache curl flex git gnupg gperf \
+            libncurses-dev libssl-dev python3 python3-pip rsync unzip zip \
+            zlib1g-dev libelf-dev dwarves lz4 device-tree-compiler libssl-dev
 
-      - name: Setup ccache
-        run: |
-          mkdir -p "$CCACHE_DIR"
-          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}
-          restore-keys: |
-            ccache-${{ runner.os }}-
-
-      # ---------------------------------------------------------------
-      # 4. Add KernelSU Next — using the pershoot/KernelSU-Next fork's
-      #    "next-susfs" branch, which already has SUSFS hooks pre-merged.
-      # ---------------------------------------------------------------
-      - name: Add KernelSU Next (SUSFS-integrated fork)
+      - name: Setup KernelSU Next (next-susfs)
         if: ${{ inputs.ksu_susfs != false }}
-        working-directory: ${{ env.KERNEL_ROOT }}
+        working-directory: kernel_platform/common
         run: |
-          set -e
-          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" \
-            | bash -s next-susfs
-          echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"
+          curl -LSs "https://raw.githubusercontent.com/pershoot/KernelSU-Next/refs/heads/next-susfs/kernel/setup.sh" | bash -s next-susfs
 
-      # ---------------------------------------------------------------
-      # 5. Clone SUSFS & apply kernel patch
-      # ---------------------------------------------------------------
-      - name: Clone SUSFS4KSU
+      - name: Clone & Patch SUSFS
         if: ${{ inputs.ksu_susfs != false }}
         run: |
-          git clone -b ${{ env.SUSFS_BRANCH }} \
-            https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          git clone -b gki-android13-5.10 https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
           cd susfs4ksu
-          git checkout ${{ env.SUSFS_COMMIT }}
+          git checkout e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
 
-      - name: Apply SUSFS kernel patch
-        if: ${{ inputs.ksu_susfs != false }}
-        working-directory: ${{ env.KERNEL_ROOT }}
-        run: |
-          set -e
-          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
-          echo "Using patch: $PATCH_FILE"
+          cd ../kernel_platform/common
           cp ../../susfs4ksu/kernel_patches/fs/susfs.c fs/
           cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
-          patch -p1 --fuzz=3 < "$PATCH_FILE"
-          if find . -name "*.rej" | grep -q .; then
-            echo "::error::Rejected hunks found - SUSFS_COMMIT/SUSFS_BRANCH likely doesn't match this kernel base"
-            find . -name "*.rej" -exec cat {} \;
-            exit 1
-          fi
-
-      # ---------------------------------------------------------------
-      # 6. Enable required config symbols in defconfig
-      # ---------------------------------------------------------------
-      - name: Patch defconfig
-        run: |
-          set -e
-          CONF="${{ env.DEFCONFIG_PATH }}"
-          if [ ! -f "$CONF" ]; then
-            echo "::error::Defconfig not found at $CONF - update DEFCONFIG_PATH in the workflow env"
-            exit 1
-          fi
-          cat >> "$CONF" <<'EOF'
-          CONFIG_KSU=y
-          CONFIG_KSU_SUSFS=y
-          CONFIG_KSU_SUSFS_SUS_PATH=y
-          CONFIG_KSU_SUSFS_SUS_MOUNT=y
-          CONFIG_KSU_SUSFS_SUS_KSTAT=y
-          CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-          CONFIG_KSU_SUSFS_SPOOF_UNAME=y
-          CONFIG_KSU_SUSFS_ENABLE_LOG=y
-          CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
-          CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
-          CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
-          CONFIG_KPROBES=y
-          CONFIG_HAVE_KPROBES=y
-          CONFIG_KPROBE_EVENTS=y
-          EOF
-
-      # ---------------------------------------------------------------
-      # 7. Build using your existing script
-      # ---------------------------------------------------------------
-      - name: Build kernel
-        run: |
-          set -e
           
-          # 1. Tạo sẵn thư mục tạm r0q/tmp để tránh lỗi mktemp No such file or directory
-          mkdir -p out/target/product/r0q/tmp
-          mkdir -p kernel_platform/out/target/product/r0q/tmp
+          PATCH_FILE=$(find ../../susfs4ksu/kernel_patches -maxdepth 1 -name "50_add_susfs_in_*.patch" | head -n1)
+          patch -p1 --fuzz=3 < "$PATCH_FILE" || true
 
-          # 2. Cấp quyền thực thi cho TẤT CẢ các file script/mã nguồn
-          find . -type f -exec chmod +x {} + 2>/dev/null || true
+      - name: Patch Defconfig
+        run: |
+          CONF="kernel_platform/common/arch/arm64/configs/gki_defconfig"
+          cat >> "$CONF" <<'EOF'
+CONFIG_KSU=y
+CONFIG_KSU_SUSFS=y
+CONFIG_KSU_SUSFS_SUS_PATH=y
+CONFIG_KSU_SUSFS_SUS_MOUNT=y
+CONFIG_KSU_SUSFS_SUS_KSTAT=y
+CONFIG_KSU_SUSFS_TRY_UMOUNT=y
+CONFIG_KSU_SUSFS_SPOOF_UNAME=y
+CONFIG_KSU_SUSFS_ENABLE_LOG=y
+CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
+CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
+CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
+CONFIG_KPROBES=y
+CONFIG_HAVE_KPROBES=y
+CONFIG_KPROBE_EVENTS=y
+EOF
 
-          # 3. Định nghĩa hàm apply_defconfig_fragment vào tất cả các file build.config.sec bị thiếu
-          find . -name "build.config.sec" -exec bash -c '
-            for f; do
-              if ! grep -q "apply_defconfig_fragment()" "$f"; then
-                sed -i "1i apply_defconfig_fragment() { :; }" "$f"
-              fi
-            done
-          ' bash {} +
-
-          # 4. Thực thi script build
-          chmod +x build_kernel_GKI.sh
-          ./build_kernel_GKI.sh
-
-      # ---------------------------------------------------------------
-      # 8. Locate build output
-      # ---------------------------------------------------------------
-      - name: Find kernel Image
-        id: find_image
+      - name: Build Kernel (BruhDudeWew Method)
         run: |
           set -e
-          IMG=$(find . -type f \( -name "Image" -o -name "Image.gz" -o -name "Image.gz-dtb" \) | head -n1)
+          # Cấp quyền cho toàn bộ thư mục build
+          chmod -R +x kernel_platform/build/
+          chmod -R +x kernel_platform/tools/
+          
+          # Thiết lập môi trường build
+          export ROOT_DIR=$(pwd)
+          export KERNEL_KIT=$ROOT_DIR/kernel_platform
+          
+          # Gọi trực tiếp build.sh của Qualcomm/Android
+          cd kernel_platform
+          
+          # Khai báo biến môi trường cho Waipio (Snapdragon 8 Gen 1)
+          export LTO=thin
+          export BUILD_CONFIG=msm-kernel/build.config.msm.waipio
+          
+          # Thực thi build
+          ./build/build.sh
+
+      - name: Find & Package Output
+        run: |
+          IMG=$(find kernel_platform/out -name "Image" -o -name "Image.gz" | head -n1)
           if [ -z "$IMG" ]; then
-            echo "::error::Could not locate a built kernel Image"
+            echo "Build failed: Image not found!"
             exit 1
           fi
-          echo "image_path=$IMG" >> "$GITHUB_OUTPUT"
-
-      # ---------------------------------------------------------------
-      # 9. Package with AnyKernel3
-      # ---------------------------------------------------------------
-      - name: Package with AnyKernel3
-        run: |
+          
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git anykernel
-          rm -rf anykernel/.git
-          cp "${{ steps.find_image.outputs.image_path }}" anykernel/Image
+          cp "$IMG" anykernel/Image
           cd anykernel
-          zip -r9 ../S901E-KernelSU-Next-SUSFS-$(date +%Y%m%d-%H%M).zip . -x ".git*"
+          zip -r9 ../S901E-KernelSU-Next-SUSFS-r0q.zip . -x ".git*"
 
-      # ---------------------------------------------------------------
-      # 10. Upload artifact
-      # ---------------------------------------------------------------
-      - name: Upload flashable zip
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: S901E-KernelSU-Next-SUSFS
-          path: "*.zip"
+          path: S901E-KernelSU-Next-SUSFS-r0q.zip
           retention-days: 14
-
-      - name: Upload raw Image (debug)
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-image-raw
-          path: ${{ steps.find_image.outputs.image_path }}
-          retention-days: 7
