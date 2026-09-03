@@ -155,10 +155,19 @@ jobs:
           mkdir -p out/target/product/r0q/tmp
           mkdir -p kernel_platform/out/target/product/r0q/tmp
 
-          # 2. Cấp quyền thực thi cho TẤT CẢ các file script/mã nguồn (bao gồm cả build/brunch)
+          # 2. Cấp quyền thực thi cho TẤT CẢ các file script/mã nguồn
           find . -type f -exec chmod +x {} + 2>/dev/null || true
 
-          # 3. Thực thi script build
+          # 3. Định nghĩa hàm apply_defconfig_fragment vào tất cả các file build.config.sec bị thiếu
+          find . -name "build.config.sec" -exec bash -c '
+            for f; do
+              if ! grep -q "apply_defconfig_fragment()" "$f"; then
+                sed -i "1i apply_defconfig_fragment() { :; }" "$f"
+              fi
+            done
+          ' bash {} +
+
+          # 4. Thực thi script build
           chmod +x build_kernel_GKI.sh
           ./build_kernel_GKI.sh
 
