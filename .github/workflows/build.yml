@@ -17,9 +17,17 @@ env:
   # ---- ADJUST THESE TO MATCH YOUR REPO ----
   KERNEL_ROOT: kernel_platform/common      # folder with the top-level Makefile
   DEFCONFIG_PATH: kernel_platform/common/arch/arm64/configs/gki_defconfig  # adjust filename
-  SUSFS_BRANCH: gki-android12-5.10          # must match your kernel base (5.10.x)
-  KSU_NEXT_BRANCH: next
+  SUSFS_BRANCH: gki-android13-5.10          # S901E Snapdragon, Android 14 firmware (S901EXXUBEXK5) — kernel stays 5.10, no android14-5.10 branch exists
   CCACHE_DIR: /home/runner/.ccache
+
+  # ---- PINNED COMPATIBLE COMMITS (do NOT use the "next" HEAD branch — it has
+  #      drifted from KernelSU upstream and breaks the SUSFS patch, see
+  #      https://github.com/KernelSU-Next/KernelSU-Next/issues/426) ----
+  KSU_NEXT_COMMIT: 300a13f657754339a294c08909e9851936f47ba9
+  # SUSFS commit matching SUSFS_BRANCH above:
+  #   gki-android12-5.10 -> ed9a1ee64e1886ee2c0288f1c91e33558465993c
+  #   gki-android13-5.10 -> e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d  (in use)
+  SUSFS_COMMIT: e891cdfa40c40e78bb20a3f5acf4d2e8149e3a7d
 
 jobs:
   build:
@@ -72,24 +80,36 @@ jobs:
             ccache-${{ runner.os }}-
 
       # ---------------------------------------------------------------
-      # 4. Add KernelSU Next
+      # 4. Add KernelSU Next (pinned to a commit known to work with SUSFS —
+      #    do NOT track the "next" branch HEAD, see note in env: above)
       # ---------------------------------------------------------------
       - name: Add KernelSU Next
         if: ${{ inputs.ksu_susfs != false }}
         working-directory: ${{ env.KERNEL_ROOT }}
         run: |
+          set -e
+          # Let the official installer clone the repo and wire it into
+          # drivers/Makefile + drivers/Kconfig (this part is safe to keep
+          # tracking upstream), THEN pin the checkout to the known-good commit.
           curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-            | bash -s ${{ env.KSU_NEXT_BRANCH }}
+            | bash -s next
+          cd KernelSU-Next
+          git fetch --depth=1 origin ${{ env.KSU_NEXT_COMMIT }}
+          git checkout ${{ env.KSU_NEXT_COMMIT }}
+          cd ..
           echo "KSU_GIT_VERSION=$(cd KernelSU-Next && git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       # ---------------------------------------------------------------
-      # 5. Clone SUSFS and apply patches
+      # 5. Clone SUSFS (pinned commit matching the KSU-Next commit above)
+      #    and apply patches
       # ---------------------------------------------------------------
       - name: Clone SUSFS4KSU
         if: ${{ inputs.ksu_susfs != false }}
         run: |
-          git clone --depth=1 -b ${{ env.SUSFS_BRANCH }} \
+          git clone -b ${{ env.SUSFS_BRANCH }} \
             https://gitlab.com/simonpunk/susfs4ksu.git susfs4ksu
+          cd susfs4ksu
+          git checkout ${{ env.SUSFS_COMMIT }}
 
       - name: Apply SUSFS kernel patch
         if: ${{ inputs.ksu_susfs != false }}
@@ -102,12 +122,22 @@ jobs:
           cp ../../susfs4ksu/kernel_patches/include/linux/susfs.h include/linux/
           cp ../../susfs4ksu/kernel_patches/include/linux/susfs_def.h include/linux/
           patch -p1 --fuzz=3 < "$PATCH_FILE"
+          if find . -name "*.rej" | grep -q .; then
+            echo "::error::Rejected hunks found - SUSFS_COMMIT/SUSFS_BRANCH likely doesn't match this kernel base"
+            find . -name "*.rej" -exec cat {} \;
+            exit 1
+          fi
 
       - name: Apply SUSFS patch to KernelSU Next
         if: ${{ inputs.ksu_susfs != false }}
         working-directory: ${{ env.KERNEL_ROOT }}/KernelSU-Next
         run: |
           patch -p1 --fuzz=3 < ../../../susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch
+          if find . -name "*.rej" | grep -q .; then
+            echo "::error::Rejected hunks found - KSU_NEXT_COMMIT/SUSFS_COMMIT pin is out of sync, see env: block"
+            find . -name "*.rej" -exec cat {} \;
+            exit 1
+          fi
 
       # ---------------------------------------------------------------
       # 6. Enable required config symbols in defconfig
@@ -142,6 +172,10 @@ jobs:
       # ---------------------------------------------------------------
       - name: Build kernel
         run: |
+          # GitHub web-upload strips the executable bit from shell scripts,
+          # so restore +x on every script the build chain calls before running.
+          find . -type f -name "*.sh" -exec chmod +x {} +
+          find . -type f -name "*.py" -exec chmod +x {} +
           chmod +x build_kernel_GKI.sh
           ./build_kernel_GKI.sh
 
