@@ -13,11 +13,12 @@ jobs:
 
       - name: Add 16GB Swap Space
         run: |
-          sudo fallocate -l 16G /swapfile
+          sudo swapoff -a || true
+          sudo rm -f /swapfile
+          sudo dd if=/dev/zero of=/swapfile bs=1M count=16384 status=progress
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
-          echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
           free -h
 
       - name: Checkout Source Code
@@ -35,55 +36,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y zip bc bison flex g++-multilib gcc-multilib libc6-dev-i386 lib32ncurses5-dev libx11-dev lib32z1-dev libxml2-utils xsltproc unzip
 
-      - name: Add KernelSU Next
+      - name: Integrate KernelSU Next
         run: |
           chmod -R +x .
-          if [ -d "kernel_platform" ]; then
+          if [ -d "kernel_platform/common" ]; then
+            cd kernel_platform/common
+            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
+          elif [ -d "kernel_platform" ]; then
             cd kernel_platform
-            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs
+            curl -LSs "https://raw.githubusercontent.com/rifs28/KernelSU-Next/next/kernel/setup.sh" | bash -s next-susfs || true
           fi
 
       - name: Setup SUSFS Patches & Configs
         run: |
-          cd kernel_platform
-          
-          # Clone repository chứa SUSFS
-          git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs4ksu || true
-
-          # Copy file nguồn và patch của SUSFS
-          cp susfs4ksu/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch ./KernelSU-Next/ || true
-          cp susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch ./common/ || true
-          cp susfs4ksu/kernel_patches/fs/susfs.c ./common/fs/ || true
-          cp susfs4ksu/kernel_patches/include/linux/susfs.h ./common/include/linux/ || true
-
-          # Áp dụng patch cho KernelSU-Next
-          if [ -d "KernelSU-Next" ]; then
-            cd KernelSU-Next
-            patch -p1 < 10_enable_susfs_for_ksu.patch || true
-            cd ..
+          TARGET_DIR=""
+          if [ -d "kernel_platform/common" ]; then
+            TARGET_DIR="kernel_platform/common"
+          elif [ -d "kernel_platform" ]; then
+            TARGET_DIR="kernel_platform"
           fi
 
-          # Áp dụng patch cho Kernel Common
-          cd common
-          patch -p1 < 50_add_susfs_in_gki-android12-5.10.patch || true
-          
-          # Bật cấu hình SUSFS vào gki_defconfig
-          DEFCONFIG="./arch/arm64/configs/gki_defconfig"
-          if [ -f "$DEFCONFIG" ]; then
-            echo "CONFIG_KSU=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $DEFCONFIG
-            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $DEFCONFIG
+          if [ -n "$TARGET_DIR" ]; then
+            cd $TARGET_DIR
+            git clone https://gitlab.com/simonpunk/susfs4ksu.git -b gki-android12-5.10 susfs4ksu || true
+
+            cp susfs4ksu/kernel_patches/fs/susfs.c ./fs/ || true
+            cp susfs4ksu/kernel_patches/include/linux/susfs.h ./include/linux/ || true
+            
+            patch -p1 < susfs4ksu/kernel_patches/5.10/50_add_susfs_in_gki-android12-5.10.patch || true
+
+            DEFCONFIG="./arch/arm64/configs/gki_defconfig"
+            if [ -f "$DEFCONFIG" ]; then
+              echo "CONFIG_KSU=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $DEFCONFIG
+              echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $DEFCONFIG
+            fi
           fi
 
-      - name: Build Kernel S901E
+      - name: Run Samsung GKI Build
         run: |
           bash build_kernel_GKI.sh
 
